@@ -1,0 +1,847 @@
+const { useState, useEffect, useRef, createContext, useContext, useMemo, useCallback } = React;
+
+// ==========================================
+// DATA
+// ==========================================
+const initialSongs = [
+    {
+        id: "s1",
+        title: "Karuppu Theme",
+        artist: "Suriya, RJ Balaji",
+        album: "Karuppu",
+        cover: "https://images.unsplash.com/photo-1593642532744-d377ab507dc8?auto=format&fit=crop&w=400&q=80",
+        url: "https://res.cloudinary.com/ds4vrv89c/video/upload/v1778328913/AUD-20260509-WA0005_b28svr.mp3"
+    },
+    {
+        id: "s2",
+        title: "The Advocate's Justice",
+        artist: "Suriya, Trisha",
+        album: "Karuppu",
+        cover: "https://images.unsplash.com/photo-1589829085413-56de8ae18c73?auto=format&fit=crop&w=400&q=80",
+        url: "https://res.cloudinary.com/ds4vrv89c/video/upload/v1778328913/AUD-20260509-WA0003_ikepek.mp3"
+    },
+    {
+        id: "s3",
+        title: "Courtroom Drama",
+        artist: "Suriya",
+        album: "Karuppu",
+        cover: "https://images.unsplash.com/photo-1627461427505-181cb2657e4e?auto=format&fit=crop&w=400&q=80",
+        url: "https://res.cloudinary.com/ds4vrv89c/video/upload/v1778328913/AUD-20260509-WA0004_aopgqm.mp3"
+    },
+    {
+        id: "s4",
+        title: "Darkness Rises",
+        artist: "Suriya, Action Theme",
+        album: "Karuppu",
+        cover: "https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=400&q=80",
+        url: "https://res.cloudinary.com/ds4vrv89c/video/upload/v1778328912/AUD-20260509-WA0006_wjauyn.mp3"
+    },
+    {
+        id: "s5",
+        title: "Divine Judgment",
+        artist: "Suriya",
+        album: "Karuppu",
+        cover: "https://images.unsplash.com/photo-1478147427282-58a87a120781?auto=format&fit=crop&w=400&q=80",
+        url: "https://res.cloudinary.com/ds4vrv89c/video/upload/v1778328910/AUD-20260508-WA0057_ha1tno.mp3"
+    },
+    {
+        id: "s6",
+        title: "Pavazhamalli",
+        artist: "Sai Abhyankkar, Harini Ivaturi",
+        album: "Pavazhamalli",
+        cover: "https://images.unsplash.com/photo-1518621736915-f3b1c41bfd00?auto=format&fit=crop&w=400&q=80",
+        url: "https://open.spotify.com/track/4yur1GSBfuS1VADyUYocqd?si=LTHv_bRMSFywQRgCdlcUvA&context=spotify%3Aplaylist%3A37i9dQZF1DX4Im4BTs2WMg"
+    }
+];
+
+// ==========================================
+// HOOKS
+// ==========================================
+function useLocalStorage(key, initialValue) {
+    const [storedValue, setStoredValue] = useState(() => {
+        try {
+            const item = window.localStorage.getItem(key);
+            return item ? JSON.parse(item) : initialValue;
+        } catch (error) {
+            console.error(error);
+            return initialValue;
+        }
+    });
+
+    const setValue = (value) => {
+        try {
+            const valueToStore = value instanceof Function ? value(storedValue) : value;
+            setStoredValue(valueToStore);
+            window.localStorage.setItem(key, JSON.stringify(valueToStore));
+        } catch (error) {
+            console.error(error);
+        }
+    };
+    return [storedValue, setValue];
+}
+
+// ==========================================
+// CONTEXTS
+// ==========================================
+const PlayerContext = createContext();
+const LibraryContext = createContext();
+
+// ==========================================
+// PROVIDERS
+// ==========================================
+const AppProviders = ({ children }) => {
+    // Library State
+    const [likedSongs, setLikedSongs] = useLocalStorage('spotify_liked_songs', []);
+    const [playlists, setPlaylists] = useLocalStorage('spotify_playlists', []);
+    const [hiddenSongs, setHiddenSongs] = useLocalStorage('spotify_hidden_songs', {}); 
+    const [recentlyPlayedIds, setRecentlyPlayedIds] = useLocalStorage('spotify_recently_played', []);
+
+    // Player State
+    const audioRef = useRef(new Audio());
+    const [currentSong, setCurrentSong] = useState(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const [volume, setVolume] = useState(1);
+    const [isLooping, setIsLooping] = useState(false);
+    const [currentQueue, setCurrentQueue] = useState([]);
+    const [queueContextId, setQueueContextId] = useState(null);
+
+    // Navigation State
+    const [currentView, setCurrentView] = useState('home'); // home, search, playlist, liked
+    const [searchQuery, setSearchQuery] = useState('');
+    const [activePlaylistId, setActivePlaylistId] = useState(null);
+
+    // Modals
+    const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+    const [addToPlaylistData, setAddToPlaylistData] = useState(null); // songId when open
+
+    // Player Effects & Listeners
+    useEffect(() => {
+        const audio = audioRef.current;
+        const setAudioData = () => setDuration(audio.duration);
+        const setAudioTime = () => setCurrentTime(audio.currentTime);
+        const handleEnd = () => {
+            if (audio.loop) return;
+            handleNext();
+        };
+
+        audio.addEventListener('loadedmetadata', setAudioData);
+        audio.addEventListener('timeupdate', setAudioTime);
+        audio.addEventListener('ended', handleEnd);
+
+        return () => {
+            audio.removeEventListener('loadedmetadata', setAudioData);
+            audio.removeEventListener('timeupdate', setAudioTime);
+            audio.removeEventListener('ended', handleEnd);
+        };
+    }, [currentQueue, currentSong]);
+
+    useEffect(() => {
+        audioRef.current.loop = isLooping;
+    }, [isLooping]);
+
+    useEffect(() => {
+        audioRef.current.volume = volume;
+    }, [volume]);
+
+    // Player Actions
+    const playSong = (song, queue, contextId) => {
+        if (!song) return;
+        if (currentSong?.id !== song.id) {
+            audioRef.current.src = song.url;
+            setCurrentSong(song);
+            
+            // Add to recently played
+            setRecentlyPlayedIds(prev => {
+                const newRecent = [song.id, ...prev.filter(id => id !== song.id)].slice(0, 10);
+                return newRecent;
+            });
+        }
+        if (queue) setCurrentQueue(queue);
+        if (contextId) setQueueContextId(contextId);
+        
+        audioRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
+    };
+
+    const togglePlay = () => {
+        if (!currentSong && currentQueue.length > 0) {
+            playSong(currentQueue[0], currentQueue, queueContextId);
+            return;
+        }
+        if (isPlaying) {
+            audioRef.current.pause();
+            setIsPlaying(false);
+        } else {
+            audioRef.current.play();
+            setIsPlaying(true);
+        }
+    };
+
+    const handleNext = () => {
+        if (!currentQueue.length || !currentSong) return;
+        const idx = currentQueue.findIndex(s => s.id === currentSong.id);
+        const nextIdx = (idx + 1) % currentQueue.length;
+        playSong(currentQueue[nextIdx]);
+    };
+
+    const handlePrev = () => {
+        if (!currentQueue.length || !currentSong) return;
+        if (audioRef.current.currentTime > 3) {
+            audioRef.current.currentTime = 0;
+            return;
+        }
+        const idx = currentQueue.findIndex(s => s.id === currentSong.id);
+        const prevIdx = idx === 0 ? currentQueue.length - 1 : idx - 1;
+        playSong(currentQueue[prevIdx]);
+    };
+
+    const seek = (time) => {
+        audioRef.current.currentTime = time;
+        setCurrentTime(time);
+    };
+
+    // Library Actions
+    const toggleLike = (songId) => {
+        setLikedSongs(prev => {
+            if (prev.includes(songId)) return prev.filter(id => id !== songId);
+            return [...prev, songId];
+        });
+    };
+
+    const createPlaylist = (name) => {
+        const newPlaylist = {
+            id: `pl_${Date.now()}`,
+            name,
+            songs: []
+        };
+        setPlaylists(prev => [...prev, newPlaylist]);
+        return newPlaylist.id;
+    };
+
+    const addToPlaylist = (playlistId, songId) => {
+        setPlaylists(prev => prev.map(pl => {
+            if (pl.id === playlistId && !pl.songs.includes(songId)) {
+                return { ...pl, songs: [...pl.songs, songId] };
+            }
+            return pl;
+        }));
+    };
+
+    const removeFromPlaylist = (playlistId, songId) => {
+        setPlaylists(prev => prev.map(pl => {
+            if (pl.id === playlistId) {
+                return { ...pl, songs: pl.songs.filter(id => id !== songId) };
+            }
+            return pl;
+        }));
+    };
+
+    const toggleHideSong = (songId, contextId) => {
+        if (!contextId) return; // Cannot hide globally, only in contexts
+        setHiddenSongs(prev => {
+            const contextHidden = prev[contextId] || [];
+            if (contextHidden.includes(songId)) {
+                return { ...prev, [contextId]: contextHidden.filter(id => id !== songId) };
+            }
+            return { ...prev, [contextId]: [...contextHidden, songId] };
+        });
+    };
+
+    const isSongHidden = (songId, contextId) => {
+        if (!contextId) return false;
+        return (hiddenSongs[contextId] || []).includes(songId);
+    };
+
+    return (
+        <PlayerContext.Provider value={{
+            currentSong, isPlaying, currentTime, duration, volume, isLooping,
+            currentQueue, queueContextId,
+            playSong, togglePlay, handleNext, handlePrev, seek, setVolume, setIsLooping
+        }}>
+            <LibraryContext.Provider value={{
+                songs: initialSongs,
+                likedSongs, toggleLike,
+                playlists, createPlaylist, addToPlaylist, removeFromPlaylist,
+                hiddenSongs, toggleHideSong, isSongHidden,
+                recentlyPlayedIds,
+                currentView, setCurrentView,
+                searchQuery, setSearchQuery,
+                activePlaylistId, setActivePlaylistId,
+                isCreateModalOpen, setIsCreateModalOpen,
+                addToPlaylistData, setAddToPlaylistData
+            }}>
+                {children}
+            </LibraryContext.Provider>
+        </PlayerContext.Provider>
+    );
+};
+
+// ==========================================
+// HELPERS
+// ==========================================
+const formatTime = (timeInSeconds) => {
+    if (isNaN(timeInSeconds)) return "0:00";
+    const m = Math.floor(timeInSeconds / 60);
+    const s = Math.floor(timeInSeconds % 60);
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+};
+
+// ==========================================
+// COMPONENTS
+// ==========================================
+
+const DropdownMenu = ({ song, contextId, onClose }) => {
+    const { toggleLike, likedSongs, setAddToPlaylistData, toggleHideSong, isSongHidden } = useContext(LibraryContext);
+    const isLiked = likedSongs.includes(song.id);
+    const isHidden = isSongHidden(song.id, contextId);
+
+    const ref = useRef();
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (ref.current && !ref.current.contains(e.target)) onClose();
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [onClose]);
+
+    return (
+        <div className="dropdown-menu" ref={ref} onClick={e => e.stopPropagation()}>
+            <div className="dropdown-item" onClick={() => { toggleLike(song.id); onClose(); }}>
+                <span>{isLiked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}</span>
+                <i className={isLiked ? "fas fa-heart" : "far fa-heart"}></i>
+            </div>
+            <div className="dropdown-item" onClick={() => { setAddToPlaylistData(song.id); onClose(); }}>
+                <span>Add to Playlist</span>
+                <i className="fas fa-plus"></i>
+            </div>
+            {contextId && (
+                <div className="dropdown-item" onClick={() => { toggleHideSong(song.id, contextId); onClose(); }}>
+                    <span>{isHidden ? 'Unhide in this Playlist' : 'Hide in this Playlist'}</span>
+                    <i className={isHidden ? "fas fa-eye" : "fas fa-eye-slash"}></i>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const SongRow = ({ song, index, contextId, queue }) => {
+    const { currentSong, isPlaying, playSong, pauseSong, togglePlay } = useContext(PlayerContext);
+    const { likedSongs, toggleLike, isSongHidden, toggleHideSong } = useContext(LibraryContext);
+    
+    const [menuOpen, setMenuOpen] = useState(false);
+    
+    const isLiked = likedSongs.includes(song.id);
+    const isActive = currentSong?.id === song.id;
+    const isHidden = isSongHidden(song.id, contextId);
+
+    const handlePlayClick = (e) => {
+        e.stopPropagation();
+        if (isActive) {
+            togglePlay();
+        } else {
+            playSong(song, queue, contextId);
+        }
+    };
+
+    return (
+        <div className={`song-row ${isActive ? 'active' : ''} ${isHidden ? 'hidden' : ''}`} onDoubleClick={handlePlayClick}>
+            <div className="song-number">
+                {isActive && isPlaying ? (
+                    <div className="equalizer">
+                        <div className="eq-bar"></div>
+                        <div className="eq-bar"></div>
+                        <div className="eq-bar"></div>
+                    </div>
+                ) : (
+                    <span>{index + 1}</span>
+                )}
+                <i className={`fas ${isActive && isPlaying ? 'fa-pause' : 'fa-play'} play-icon`} onClick={handlePlayClick}></i>
+            </div>
+            
+            <div className="song-info-col">
+                <div className="song-cover-wrapper">
+                    <img src={song.cover} alt={song.title} />
+                </div>
+                <div>
+                    <div className="song-title">{song.title}</div>
+                    <div className="song-artist">{song.artist}</div>
+                </div>
+            </div>
+            
+            <div className="song-album">{song.album}</div>
+            
+            <div className="song-actions">
+                {isHidden && (
+                    <button className="unhide-btn" onClick={(e) => { e.stopPropagation(); toggleHideSong(song.id, contextId); }}>Unhide</button>
+                )}
+                <i 
+                    className={`heart-icon ${isLiked ? 'fas fa-heart liked action-icon visible' : 'far fa-heart action-icon'}`} 
+                    onClick={(e) => { e.stopPropagation(); toggleLike(song.id); }}
+                ></i>
+                <div style={{ position: 'relative' }}>
+                    <i 
+                        className="fas fa-ellipsis-v action-icon visible" 
+                        onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
+                    ></i>
+                    {menuOpen && <DropdownMenu song={song} contextId={contextId} onClose={() => setMenuOpen(false)} />}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const SongList = ({ songs, contextId }) => {
+    if (songs.length === 0) {
+        return (
+            <div className="empty-state">
+                <i className="fas fa-music"></i>
+                <h3>No songs found</h3>
+                <p>Try searching for something else or add songs to your playlist.</p>
+            </div>
+        );
+    }
+
+    return (
+        <div className="songs-container">
+            <div className="songs-header">
+                <div style={{ textAlign: 'center' }}>#</div>
+                <div>TITLE</div>
+                <div>ALBUM</div>
+                <div style={{ textAlign: 'right', paddingRight: '32px' }}><i className="far fa-clock"></i></div>
+            </div>
+            {songs.map((song, idx) => (
+                <SongRow key={song.id} song={song} index={idx} contextId={contextId} queue={songs} />
+            ))}
+        </div>
+    );
+};
+
+const RecentlyPlayed = () => {
+    const { recentlyPlayedIds, songs, setCurrentView, setActivePlaylistId } = useContext(LibraryContext);
+    const { playSong } = useContext(PlayerContext);
+    
+    if (!recentlyPlayedIds.length) return null;
+    
+    const recentSongs = recentlyPlayedIds.map(id => songs.find(s => s.id === id)).filter(Boolean);
+    
+    return (
+        <div style={{ padding: '0 24px' }}>
+            <h2 style={{ fontSize: '24px', fontWeight: '700', marginBottom: '16px', marginTop: '16px' }}>Recently Played</h2>
+            <div className="cards-grid">
+                {recentSongs.slice(0, 5).map(song => (
+                    <div className="card" key={`recent-${song.id}`} onClick={() => playSong(song, recentSongs, 'recently_played')}>
+                        <img src={song.cover} alt={song.title} className="card-image" />
+                        <div className="card-title">{song.title}</div>
+                        <div className="card-subtitle">{song.artist}</div>
+                        <div className="card-play-btn" onClick={(e) => { e.stopPropagation(); playSong(song, recentSongs, 'recently_played'); }}>
+                            <i className="fas fa-play"></i>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const TopBar = () => {
+    const { currentView, setCurrentView, searchQuery, setSearchQuery } = useContext(LibraryContext);
+    
+    return (
+        <div className="top-bar">
+            <div className="nav-buttons">
+                <button className="circle-btn" onClick={() => setCurrentView('home')}><i className="fas fa-chevron-left"></i></button>
+                <button className="circle-btn"><i className="fas fa-chevron-right"></i></button>
+            </div>
+            
+            {(currentView === 'search' || searchQuery.length > 0) && (
+                <div className="search-bar">
+                    <i className="fas fa-search"></i>
+                    <input 
+                        type="text" 
+                        placeholder="What do you want to listen to?" 
+                        value={searchQuery}
+                        onChange={(e) => {
+                            setSearchQuery(e.target.value);
+                            if (e.target.value.length > 0) setCurrentView('search');
+                            else if (currentView === 'search') setCurrentView('home');
+                        }}
+                        autoFocus
+                    />
+                </div>
+            )}
+            
+            <div className="user-profile">
+                <i className="fas fa-user"></i>
+            </div>
+        </div>
+    );
+};
+
+const MainView = () => {
+    const { 
+        currentView, songs, likedSongs, playlists, activePlaylistId, searchQuery,
+        isSongHidden
+    } = useContext(LibraryContext);
+    const { playSong, currentSong, isPlaying, togglePlay } = useContext(PlayerContext);
+
+    // Determine what to show
+    let displaySongs = [];
+    let title = "";
+    let cover = "";
+    let contextId = null;
+    let subtitle = "";
+
+    if (currentView === 'search' || searchQuery) {
+        const query = searchQuery.toLowerCase();
+        displaySongs = songs.filter(s => 
+            s.title.toLowerCase().includes(query) || 
+            s.artist.toLowerCase().includes(query) || 
+            s.album.toLowerCase().includes(query)
+        );
+        title = "Search Results";
+        contextId = 'search';
+    } 
+    else if (currentView === 'liked') {
+        displaySongs = songs.filter(s => likedSongs.includes(s.id));
+        title = "Liked Songs";
+        cover = "linear-gradient(135deg, #450af5, #c4efd9)";
+        contextId = 'liked_songs';
+        subtitle = `${displaySongs.length} songs`;
+    }
+    else if (currentView === 'playlist' && activePlaylistId) {
+        const pl = playlists.find(p => p.id === activePlaylistId);
+        if (pl) {
+            displaySongs = pl.songs.map(id => songs.find(s => s.id === id)).filter(Boolean);
+            title = pl.name;
+            cover = displaySongs.length > 0 ? `url(${displaySongs[0].cover})` : '#282828';
+            contextId = pl.id;
+            subtitle = `${displaySongs.length} songs`;
+        }
+    }
+    else {
+        // Home
+        displaySongs = songs;
+        title = "Karuppu (Original Motion Picture Soundtrack)";
+        cover = "url(https://images.unsplash.com/photo-1593642532744-d377ab507dc8?auto=format&fit=crop&w=400&q=80)";
+        contextId = 'home_album';
+        subtitle = `Suriya • ${songs.length} songs`;
+    }
+
+    // Filter out hidden songs from auto-play queues, but show them in UI as semi-transparent
+    // The SongRow component handles the visual hidden state
+    
+    // Check if the current context is playing
+    const isContextPlaying = currentSong && displaySongs.some(s => s.id === currentSong.id) && isPlaying;
+
+    const handleLargePlay = () => {
+        if (isContextPlaying) {
+            togglePlay();
+        } else if (displaySongs.length > 0) {
+            // Find first non-hidden song
+            const playable = displaySongs.find(s => !isSongHidden(s.id, contextId)) || displaySongs[0];
+            playSong(playable, displaySongs, contextId);
+        }
+    };
+
+    return (
+        <div className="main-content">
+            <TopBar />
+            
+            {currentView !== 'search' && (
+                <div className="hero-header">
+                    <div className="hero-cover" style={{ background: cover.startsWith('url') ? cover : undefined, backgroundColor: cover.startsWith('linear') || cover.startsWith('#') ? cover : undefined }}>
+                        {currentView === 'liked' && <i className="fas fa-heart" style={{ fontSize: '64px' }}></i>}
+                        {currentView === 'playlist' && !cover.startsWith('url') && <i className="fas fa-music" style={{ fontSize: '64px', color: '#b3b3b3' }}></i>}
+                    </div>
+                    <div className="hero-info">
+                        <p>{currentView === 'liked' ? 'PLAYLIST' : currentView === 'playlist' ? 'PLAYLIST' : 'ALBUM'}</p>
+                        <h1>{title}</h1>
+                        <div className="hero-meta">
+                            {currentView === 'home' && <span>Suriya</span>}
+                            {subtitle && <span>• {subtitle}</span>}
+                        </div>
+                    </div>
+                </div>
+            )}
+            
+            {currentView === 'home' && <RecentlyPlayed />}
+            
+            {(currentView !== 'search' || displaySongs.length > 0) && currentView !== 'home' && (
+                <div className="action-bar">
+                    <button className="play-large-btn" onClick={handleLargePlay}>
+                        <i className={`fas ${isContextPlaying ? 'fa-pause' : 'fa-play'}`} style={{ marginLeft: isContextPlaying ? '0' : '4px' }}></i>
+                    </button>
+                </div>
+            )}
+            
+            {currentView === 'home' && (
+                 <div className="action-bar" style={{paddingTop: '0'}}>
+                 <button className="play-large-btn" onClick={handleLargePlay}>
+                     <i className={`fas ${isContextPlaying ? 'fa-pause' : 'fa-play'}`} style={{ marginLeft: isContextPlaying ? '0' : '4px' }}></i>
+                 </button>
+             </div>
+            )}
+
+            <SongList songs={displaySongs} contextId={contextId} />
+        </div>
+    );
+};
+
+const Sidebar = () => {
+    const { 
+        currentView, setCurrentView, 
+        playlists, setIsCreateModalOpen,
+        setActivePlaylistId, setSearchQuery
+    } = useContext(LibraryContext);
+
+    return (
+        <div className="sidebar">
+            <div className="logo" onClick={() => { setCurrentView('home'); setSearchQuery(''); }}>
+                <i className="fab fa-spotify" style={{ fontSize: '28px' }}></i>
+                <span>Spotify</span>
+            </div>
+            
+            <ul className="nav-links">
+                <li className={`nav-item ${currentView === 'home' ? 'active' : ''}`} onClick={() => { setCurrentView('home'); setSearchQuery(''); }}>
+                    <i className="fas fa-home"></i> <span>Home</span>
+                </li>
+                <li className={`nav-item ${currentView === 'search' ? 'active' : ''}`} onClick={() => setCurrentView('search')}>
+                    <i className="fas fa-search"></i> <span>Search</span>
+                </li>
+                <li className={`nav-item ${currentView === 'library' ? 'active' : ''}`}>
+                    <i className="fas fa-book-open"></i> <span>Your Library</span>
+                </li>
+            </ul>
+            
+            <div className="playlist-section" style={{ marginTop: '32px' }}>
+                <div className="nav-item" onClick={() => setIsCreateModalOpen(true)}>
+                    <div style={{ width: '24px', height: '24px', backgroundColor: '#b3b3b3', color: 'black', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '2px' }}>
+                        <i className="fas fa-plus" style={{ fontSize: '14px' }}></i>
+                    </div>
+                    <span>Create Playlist</span>
+                </div>
+                <div className={`nav-item ${currentView === 'liked' ? 'active' : ''}`} onClick={() => setCurrentView('liked')}>
+                    <div style={{ width: '24px', height: '24px', background: 'linear-gradient(135deg, #450af5, #c4efd9)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '2px' }}>
+                        <i className="fas fa-heart" style={{ fontSize: '12px' }}></i>
+                    </div>
+                    <span>Liked Songs</span>
+                </div>
+            </div>
+            
+            <hr style={{ border: 'none', borderTop: '1px solid #282828', margin: '16px 24px' }} />
+            
+            <div className="playlist-section" style={{ flex: 1, overflowY: 'auto' }}>
+                {playlists.map(pl => (
+                    <div 
+                        key={pl.id} 
+                        className="nav-item" 
+                        style={{ padding: '8px 16px', fontSize: '14px', fontWeight: '500' }}
+                        onClick={() => {
+                            setActivePlaylistId(pl.id);
+                            setCurrentView('playlist');
+                        }}
+                    >
+                        {pl.name}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const Playbar = () => {
+    const { 
+        currentSong, isPlaying, currentTime, duration, volume, isLooping,
+        togglePlay, handleNext, handlePrev, seek, setVolume, setIsLooping
+    } = useContext(PlayerContext);
+    const { toggleLike, likedSongs } = useContext(LibraryContext);
+
+    return (
+        <div className="playbar">
+            {/* Now Playing Info */}
+            <div className="now-playing">
+                {currentSong ? (
+                    <>
+                        <img src={currentSong.cover} alt="cover" />
+                        <div>
+                            <div className="track-name" style={{ color: 'white' }}>{currentSong.title}</div>
+                            <div className="track-artist">{currentSong.artist}</div>
+                        </div>
+                        <i 
+                            className={likedSongs.includes(currentSong.id) ? "fas fa-heart" : "far fa-heart"} 
+                            style={{ color: likedSongs.includes(currentSong.id) ? 'var(--accent-color)' : 'var(--text-secondary)', cursor: 'pointer', marginLeft: '12px' }}
+                            onClick={() => toggleLike(currentSong.id)}
+                        ></i>
+                    </>
+                ) : (
+                    <div className="track-name" style={{ color: 'var(--text-secondary)' }}>Select a song to play</div>
+                )}
+            </div>
+
+            {/* Controls */}
+            <div className="player-controls">
+                <div className="control-buttons">
+                    <button><i className="fas fa-random"></i></button>
+                    <button onClick={handlePrev}><i className="fas fa-step-backward"></i></button>
+                    <button className="play-btn" onClick={togglePlay}>
+                        <i className={isPlaying ? "fas fa-pause-circle" : "fas fa-play-circle"}></i>
+                    </button>
+                    <button onClick={handleNext}><i className="fas fa-step-forward"></i></button>
+                    <button className={isLooping ? "active" : ""} onClick={() => setIsLooping(!isLooping)}>
+                        <i className="fas fa-redo"></i>
+                    </button>
+                </div>
+                <div className="progress-container">
+                    <span>{formatTime(currentTime)}</span>
+                    <input 
+                        type="range" 
+                        min="0" 
+                        max={duration || 100} 
+                        value={currentTime || 0}
+                        onChange={(e) => seek(Number(e.target.value))}
+                        style={{
+                            background: `linear-gradient(to right, ${currentSong ? 'var(--text-primary)' : '#535353'} ${(currentTime / (duration || 1)) * 100}%, #535353 ${(currentTime / (duration || 1)) * 100}%)`
+                        }}
+                    />
+                    <span>{formatTime(duration)}</span>
+                </div>
+            </div>
+
+            {/* Extra Controls */}
+            <div className="extra-controls">
+                <i className="fas fa-microphone"></i>
+                <i className="fas fa-bars"></i>
+                <i className="fas fa-laptop"></i>
+                <div className="volume-control">
+                    <i className={volume === 0 ? "fas fa-volume-mute" : volume < 0.5 ? "fas fa-volume-down" : "fas fa-volume-up"}></i>
+                    <input 
+                        type="range" 
+                        min="0" max="100" 
+                        value={volume * 100}
+                        onChange={(e) => setVolume(Number(e.target.value) / 100)}
+                        style={{
+                            background: `linear-gradient(to right, var(--text-primary) ${volume * 100}%, #535353 ${volume * 100}%)`
+                        }}
+                    />
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const Modals = () => {
+    const { 
+        isCreateModalOpen, setIsCreateModalOpen, createPlaylist,
+        addToPlaylistData, setAddToPlaylistData, playlists, addToPlaylist
+    } = useContext(LibraryContext);
+    
+    const [playlistName, setPlaylistName] = useState("");
+
+    const handleCreate = () => {
+        if (playlistName.trim()) {
+            createPlaylist(playlistName.trim());
+            setPlaylistName("");
+            setIsCreateModalOpen(false);
+        }
+    };
+
+    return (
+        <>
+            {isCreateModalOpen && (
+                <div className="modal-overlay" onClick={() => setIsCreateModalOpen(false)}>
+                    <div className="modal-content" onClick={e => e.stopPropagation()}>
+                        <h2>Create Playlist</h2>
+                        <input 
+                            type="text" 
+                            placeholder="My Awesome Playlist" 
+                            value={playlistName}
+                            onChange={e => setPlaylistName(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleCreate()}
+                            autoFocus
+                        />
+                        <div className="modal-actions">
+                            <button className="btn-secondary" onClick={() => setIsCreateModalOpen(false)}>Cancel</button>
+                            <button className="btn-primary" onClick={handleCreate}>Create</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {addToPlaylistData && (
+                <div className="modal-overlay" onClick={() => setAddToPlaylistData(null)}>
+                    <div className="modal-content" onClick={e => e.stopPropagation()}>
+                        <h2>Add to Playlist</h2>
+                        {playlists.length === 0 ? (
+                            <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '24px 0' }}>
+                                <p>You don't have any playlists yet.</p>
+                                <button className="btn-primary" style={{ marginTop: '16px' }} onClick={() => {
+                                    setAddToPlaylistData(null);
+                                    setIsCreateModalOpen(true);
+                                }}>Create One</button>
+                            </div>
+                        ) : (
+                            <div className="modal-list">
+                                {playlists.map(pl => (
+                                    <div 
+                                        key={pl.id} 
+                                        className="modal-list-item"
+                                        onClick={() => {
+                                            addToPlaylist(pl.id, addToPlaylistData);
+                                            setAddToPlaylistData(null);
+                                        }}
+                                    >
+                                        <div style={{ fontWeight: '500' }}>{pl.name}</div>
+                                        <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{pl.songs.length} songs</div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div className="modal-actions">
+                            <button className="btn-secondary" onClick={() => setAddToPlaylistData(null)}>Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    );
+};
+
+const BottomNav = () => {
+    const { currentView, setCurrentView } = useContext(LibraryContext);
+    
+    return (
+        <div className="bottom-nav">
+            <div className={`bottom-nav-item ${currentView === 'home' ? 'active' : ''}`} onClick={() => setCurrentView('home')}>
+                <i className="fas fa-home"></i>
+                <span>Home</span>
+            </div>
+            <div className={`bottom-nav-item ${currentView === 'search' ? 'active' : ''}`} onClick={() => setCurrentView('search')}>
+                <i className="fas fa-search"></i>
+                <span>Search</span>
+            </div>
+            <div className={`bottom-nav-item ${currentView === 'library' || currentView === 'playlist' || currentView === 'liked' ? 'active' : ''}`} onClick={() => setCurrentView('liked')}>
+                <i className="fas fa-book-open"></i>
+                <span>Library</span>
+            </div>
+        </div>
+    );
+};
+
+const App = () => {
+    return (
+        <AppProviders>
+            <div className="app-container">
+                <Sidebar />
+                <MainView />
+            </div>
+            <Playbar />
+            <BottomNav />
+            <Modals />
+        </AppProviders>
+    );
+};
+
+// Render
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
